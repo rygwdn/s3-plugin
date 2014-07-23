@@ -12,7 +12,10 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Date;
 import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
+import com.amazonaws.AmazonClientException;
 import com.amazonaws.regions.Region;
 import com.amazonaws.regions.RegionUtils;
 import com.amazonaws.regions.Regions;
@@ -28,6 +31,8 @@ public class S3UploadCallable extends AbstractS3Callable implements FileCallable
     private final String selregion;
     private final boolean produced;
     private final boolean useServerSideEncryption;
+
+    private static final Logger LOGGER = Logger.getLogger(S3UploadCallable.class.getName());
 
     public S3UploadCallable(boolean produced, String accessKey, Secret secretKey, boolean useRole, Destination dest, List<MetadataPair> userMetadata, String storageClass,
             String selregion, boolean useServerSideEncryption) {
@@ -70,7 +75,26 @@ public class S3UploadCallable extends AbstractS3Callable implements FileCallable
      */
     public FingerprintRecord invoke(FilePath file) throws IOException, InterruptedException {
         setRegion();
-        PutObjectResult result = getClient().putObject(dest.bucketName, dest.objectName, file.read(), buildMetadata(file));
+
+        String bucketName = dest.bucketName;
+        String key = dest.objectName;
+        ObjectMetadata metadata = buildMetadata(file);
+
+        PutObjectResult result = null;
+        for (int i = 0; i < 10; i++) {
+            try {
+                result = getClient().putObject(bucketName, key, file.read(), metadata);
+            } catch (AmazonClientException e) {
+                String message = "Failed to upload, retrying "
+                    + Integer.toString(i) + " of " + Integer.toString(10)
+                    + ". Message: " + e.getMessage();
+                LOGGER.log(Level.WARNING, message, e);
+            }
+        }
+        if (result == null) {
+            // One last time to get the exception..
+            result = getClient().putObject(bucketName, key, file.read(), metadata);
+        }
         return new FingerprintRecord(produced, dest.bucketName, file.getName(), result.getETag());
     }
 
